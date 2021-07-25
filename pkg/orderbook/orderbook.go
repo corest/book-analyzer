@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// New returns newly initialized OrderBook
 func New(targetSize int) *OrderBook {
 	return &OrderBook{
 		targetSize: targetSize,
@@ -15,6 +16,7 @@ func New(targetSize int) *OrderBook {
 	}
 }
 
+// Parse represents main parsing function for single input line
 func (ob *OrderBook) Parse(inputString string) (*OrderResult, error) {
 	in := strings.Split(inputString, " ")
 
@@ -153,6 +155,7 @@ func (ob *OrderBook) buyShares() float64 {
 		minPriceOrderIndex += 1
 
 		// skip removed orders
+		// todo: cleanup removed orders with some frequency
 		if !orderState.IsActive {
 			continue
 		}
@@ -193,33 +196,6 @@ func (ob *OrderBook) removeSharesFromOrder(id string, shares int) float64 {
 	}
 
 	return ob.executeOrder(id)
-}
-
-// for debug only
-func (ob *OrderBook) ShowBids() {
-	for _, o := range ob.bids {
-		if ob.orderIDs[o.ID].IsActive {
-			fmt.Printf("bid | id: %s | shares: %d | price: %f\n", o.ID, ob.orderIDs[o.ID].Shares, o.Price)
-		}
-	}
-	fmt.Printf("Total bids: %d\n", ob.bidShareSum)
-}
-
-// for debug only
-func (ob *OrderBook) ShowAsks() {
-	for _, o := range ob.asks {
-		if ob.orderIDs[o.ID].IsActive {
-			fmt.Printf("ask | id: %s | shares: %d | price: %f\n", o.ID, ob.orderIDs[o.ID].Shares, o.Price)
-		}
-	}
-	fmt.Printf("Total asks: %d\n", ob.askShareSum)
-
-}
-
-// for debug only
-func (ob *OrderBook) ShowStates() {
-	fmt.Printf("Bid shares sum: %d | ask shares sum: %d\n", ob.bidShareSum, ob.askShareSum)
-	fmt.Printf("%v\n", ob.orderIDs)
 }
 
 func getOrderCode(orderType OrderType) string {
