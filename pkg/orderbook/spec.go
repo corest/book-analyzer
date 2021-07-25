@@ -41,3 +41,9 @@ type OrderExecution struct {
 	Action    TradingAction
 	Total     string
 }
+
+type OrderResult struct {
+	Total     float64
+	OrderCode string
+	Timestamp string
+}

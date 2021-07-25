@@ -15,7 +15,7 @@ func New(targetSize int) *OrderBook {
 	}
 }
 
-func (ob *OrderBook) Parse(inputString string) (string, error) {
+func (ob *OrderBook) Parse(inputString string) (*OrderResult, error) {
 	in := strings.Split(inputString, " ")
 
 	switch len(in) {
@@ -33,14 +33,18 @@ func (ob *OrderBook) Parse(inputString string) (string, error) {
 
 		income, err := ob.addOrder(shares, newOrder)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 
 		timestamp := in[0]
 		id := in[2]
 		orderCode := getOrderCode(ob.orderIDs[id].Type)
 
-		return formatResult(timestamp, orderCode, income), nil
+		return &OrderResult{
+			Timestamp: timestamp,
+			OrderCode: orderCode,
+			Total:     income,
+		}, nil
 
 	case 4:
 		// format: "timestamp operation id shares"
@@ -52,10 +56,15 @@ func (ob *OrderBook) Parse(inputString string) (string, error) {
 		id := in[2]
 		orderCode := getOrderCode(ob.orderIDs[id].Type)
 
-		return formatResult(timestamp, orderCode, expense), nil
+		return &OrderResult{
+			Timestamp: timestamp,
+			OrderCode: orderCode,
+			Total:     expense,
+		}, nil
+
 	}
 
-	return "", errors.New(fmt.Sprintf("failed to parse input %s", inputString))
+	return nil, errors.New(fmt.Sprintf("failed to parse input %s", inputString))
 }
 
 // there are no orders adding new shares to existing
@@ -80,7 +89,7 @@ func (ob *OrderBook) addOrder(shares int, order *Order) (float64, error) {
 
 func (ob *OrderBook) addBidOrder(shares int, order *Order) float64 {
 	ob.bidShareSum += shares
-	ob.bids = addSortedOrder(order, ob.bids)
+	ob.bids = ob.addSortedOrder(order, ob.bids)
 
 	return ob.executeOrder(order.ID)
 }
@@ -128,7 +137,7 @@ func (ob *OrderBook) sellShares() float64 {
 
 func (ob *OrderBook) addAskOrder(shares int, order *Order) float64 {
 	ob.askShareSum += shares
-	ob.asks = addSortedOrder(order, ob.asks)
+	ob.asks = ob.addSortedOrder(order, ob.asks)
 
 	return ob.executeOrder(order.ID)
 }
@@ -193,6 +202,7 @@ func (ob *OrderBook) ShowBids() {
 			fmt.Printf("bid | id: %s | shares: %d | price: %f\n", o.ID, ob.orderIDs[o.ID].Shares, o.Price)
 		}
 	}
+	fmt.Printf("Total bids: %d\n", ob.bidShareSum)
 }
 
 // for debug only
@@ -202,6 +212,8 @@ func (ob *OrderBook) ShowAsks() {
 			fmt.Printf("ask | id: %s | shares: %d | price: %f\n", o.ID, ob.orderIDs[o.ID].Shares, o.Price)
 		}
 	}
+	fmt.Printf("Total asks: %d\n", ob.askShareSum)
+
 }
 
 // for debug only
@@ -232,9 +244,12 @@ func getOrderType(str string) OrderType {
 	}
 }
 
-func addSortedOrder(order *Order, data []*Order) []*Order {
+func (ob *OrderBook) addSortedOrder(order *Order, data []*Order) []*Order {
 	i := sort.Search(len(data), func(i int) bool {
-		return data[i].Price >= order.Price
+		if data[i].Price == order.Price {
+			return ob.orderIDs[data[i].ID].Shares <= ob.orderIDs[order.ID].Shares
+		}
+		return data[i].Price > order.Price
 	})
 
 	if i == len(data) {
@@ -245,17 +260,4 @@ func addSortedOrder(order *Order, data []*Order) []*Order {
 	data = append(data[:i+1], data[i:]...)
 	data[i] = order
 	return data
-}
-
-func formatResult(timestamp string, orderCode string, total float64) string {
-	var result string
-
-	switch t := total; {
-	case t > 0:
-		result = fmt.Sprintf("%s %s %.2f", timestamp, orderCode, total)
-	case t < 0:
-		result = fmt.Sprintf("%s %s NA", timestamp, orderCode)
-	}
-
-	return result
 }

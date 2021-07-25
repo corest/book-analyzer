@@ -19,18 +19,32 @@ func main() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	orderBook := orderbook.New(*targetSize)
+	var previousBuyResult, previousSellResult float64
 	for scanner.Scan() {
 		inputString := scanner.Text()
 
 		result, err := orderBook.Parse(inputString)
-
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			continue
 		}
+		if result.OrderCode == "B" && orderbook.FloatEqual(previousBuyResult, result.Total) {
+			continue
+		}
+		if result.OrderCode == "S" && orderbook.FloatEqual(previousSellResult, result.Total) {
+			continue
+		}
 
-		if result != "" {
-			fmt.Println(result)
+		output := orderbook.FormatResult(result)
+
+		if output != "" {
+			if result.OrderCode == "B" {
+				previousBuyResult = result.Total
+			} else {
+				previousSellResult = result.Total
+
+			}
+			fmt.Println(output)
 		}
 	}
 }
