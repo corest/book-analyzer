@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"flag"
+	"os"
 
 	"github.com/corest/bookanalyzer/pkg/orderbook"
 )
@@ -15,7 +17,10 @@ func main() {
 	}
 
 	orderBook := orderbook.New(*targetSize)
-	err := orderBook.Process()
+
+	scanner := bufio.NewScanner(os.Stdin)
+
+	err := orderBook.Process(scanner)
 	if err != nil {
 		panic(err)
 	}

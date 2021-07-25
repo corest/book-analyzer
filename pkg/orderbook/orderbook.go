@@ -18,9 +18,8 @@ func New(targetSize int) *OrderBook {
 	}
 }
 
-func (ob *OrderBook) Process() error {
+func (ob *OrderBook) Process(scanner *bufio.Scanner) error {
 
-	scanner := bufio.NewScanner(os.Stdin)
 	var previousBuyResult, previousSellResult float64
 	for scanner.Scan() {
 		inputString := scanner.Text()
