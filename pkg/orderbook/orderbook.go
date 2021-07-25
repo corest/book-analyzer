@@ -3,6 +3,7 @@ package orderbook
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -18,44 +19,47 @@ const (
 type Order struct {
 	Timestamp string // not used in program widely so no need in actual time
 	ID        string
-	Type      OrderType
 	Shares    int
-	Sum       float64
+	Type      OrderType
+	Price     float64
 }
 
 type OrderBook struct {
 	bids     []*Order
 	asks     []*Order
-	orderIDs map[string]OrderType
+	orderIDs map[string]bool
 }
 
 func New() *OrderBook {
 	return &OrderBook{
-		orderIDs: map[string]OrderType{},
+		orderIDs: map[string]bool{},
 	}
 }
 
 func (ob *OrderBook) Parse(inputString string) (string, error) {
 	in := strings.Split(inputString, " ")
 
+	// add/remove order always has the same amount of shares for particular ID
+	// therefore it is either added or removed
+	// there is no need to have update order
 	switch len(in) {
 	case 6:
-		// format: "timestamp operation id order_type sum shares"
-		sum, _ := strconv.ParseFloat(in[4], 32) // ignoring error for now
+		// format: "timestamp operation id order_type price shares"
+		price, _ := strconv.ParseFloat(in[4], 32) // ignoring error for now
 		shares, _ := strconv.Atoi(in[5])
 		orderType := getOrderType(in[3])
 		newOrder := &Order{
 			Timestamp: in[0],
 			ID:        in[2],
 			Type:      orderType,
-			Sum:       sum,
+			Price:     floatToFixedSign(price, 2),
 			Shares:    shares,
 		}
 		return ob.addOrder(newOrder)
 	case 4:
 		// format: "timestamp operation id shares"
 		shares, _ := strconv.Atoi(in[3])
-		return ob.removeOrder(in[2], shares)
+		return ob.markOrderDeleted(in[2], shares)
 	default:
 		return "", nil // error failed to parse and continue
 	}
@@ -66,7 +70,7 @@ func (ob *OrderBook) addOrder(order *Order) (string, error) {
 		return "", errors.New("unknown order type")
 	}
 
-	ob.orderIDs[order.ID] = order.Type
+	ob.orderIDs[order.ID] = true
 
 	if order.Type == BidOrder {
 		return ob.addBidOrder(order)
@@ -76,37 +80,40 @@ func (ob *OrderBook) addOrder(order *Order) (string, error) {
 }
 
 func (ob *OrderBook) addBidOrder(order *Order) (string, error) {
-	fmt.Printf("Bid order with id: %#q\n", order.ID)
-	ob.bids = append(ob.bids, order)
+	ob.bids = addSortedOrder(order, ob.bids)
 	return "", nil
 }
 
 func (ob *OrderBook) addAskOrder(order *Order) (string, error) {
-	fmt.Printf("Ask order with id: %#q\n", order.ID)
-	ob.asks = append(ob.asks, order)
+	ob.asks = addSortedOrder(order, ob.asks)
 	return "", nil
 }
 
-func (ob *OrderBook) removeOrder(id string, shares int) (string, error) {
-	orderType := ob.orderIDs[id]
-	delete(ob.orderIDs, id)
-	if orderType == BidOrder {
-		fmt.Printf("Remove bid order with id: %#q\n", id)
-		return ob.removeBidOrder(id, shares)
-	} else {
-		fmt.Printf("Remove ask order with id: %#q\n", id)
-		return ob.removeAskOrder(id, shares)
+func (ob *OrderBook) markOrderDeleted(id string, shares int) (string, error) {
+	ob.orderIDs[id] = false
+
+	return "", nil
+}
+
+// debug purpose
+func (ob *OrderBook) ShowBids() {
+	for i, o := range ob.bids {
+		if ob.orderIDs[o.ID] {
+			fmt.Printf("bid | id: %s | %d: %f\n", o.ID, i, o.Price)
+		}
 	}
 }
 
-func (ob *OrderBook) removeBidOrder(id string, shares int) (string, error) {
-	// remove from ob.bids
-	return "", nil
+func (ob *OrderBook) ShowAsks() {
+	for i, o := range ob.asks {
+		if ob.orderIDs[o.ID] {
+			fmt.Printf("ask | id %s | %d: %f\n", o.ID, i, o.Price)
+		}
+	}
 }
 
-func (ob *OrderBook) removeAskOrder(id string, shares int) (string, error) {
-	// remove from ob.bids
-	return "", nil
+func (ob *OrderBook) ShowStates() {
+	fmt.Printf("\n%v\n", ob.orderIDs)
 }
 
 func getOrderType(str string) OrderType {
@@ -118,4 +125,19 @@ func getOrderType(str string) OrderType {
 	default:
 		return Undefined
 	}
+}
+
+func addSortedOrder(order *Order, data []*Order) []*Order {
+	i := sort.Search(len(data), func(i int) bool {
+		return data[i].Price >= order.Price
+	})
+
+	if i == len(data) {
+		return append(data, order)
+	}
+
+	// make space for the inserted element by shifting values
+	data = append(data[:i+1], data[i:]...)
+	data[i] = order
+	return data
 }

@@ -30,4 +30,7 @@ func main() {
 		}
 	}
 
+	orderBook.ShowBids()
+	orderBook.ShowAsks()
+	orderBook.ShowStates()
 }
