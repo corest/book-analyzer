@@ -186,23 +186,25 @@ func (ob *OrderBook) removeSharesFromOrder(id string, shares int) float64 {
 	return ob.executeOrder(id)
 }
 
-// debug purpose
+// for debug only
 func (ob *OrderBook) ShowBids() {
-	for i, o := range ob.bids {
+	for _, o := range ob.bids {
 		if ob.orderIDs[o.ID].IsActive {
-			fmt.Printf("bid | id: %s | %d: %f\n", o.ID, i, o.Price)
+			fmt.Printf("bid | id: %s | shares: %d | price: %f\n", o.ID, ob.orderIDs[o.ID].Shares, o.Price)
 		}
 	}
 }
 
+// for debug only
 func (ob *OrderBook) ShowAsks() {
-	for i, o := range ob.asks {
+	for _, o := range ob.asks {
 		if ob.orderIDs[o.ID].IsActive {
-			fmt.Printf("ask | id %s | %d: %f\n", o.ID, i, o.Price)
+			fmt.Printf("ask | id: %s | shares: %d | price: %f\n", o.ID, ob.orderIDs[o.ID].Shares, o.Price)
 		}
 	}
 }
 
+// for debug only
 func (ob *OrderBook) ShowStates() {
 	fmt.Printf("Bid shares sum: %d | ask shares sum: %d\n", ob.bidShareSum, ob.askShareSum)
 	fmt.Printf("%v\n", ob.orderIDs)
