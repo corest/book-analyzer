@@ -1,8 +1,10 @@
 package orderbook
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,8 +18,42 @@ func New(targetSize int) *OrderBook {
 	}
 }
 
-// Parse represents main parsing function for single input line
-func (ob *OrderBook) Parse(inputString string) (*OrderResult, error) {
+func (ob *OrderBook) Process() error {
+
+	scanner := bufio.NewScanner(os.Stdin)
+	var previousBuyResult, previousSellResult float64
+	for scanner.Scan() {
+		inputString := scanner.Text()
+
+		result, err := ob.parse(inputString)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			continue
+		}
+		if result.OrderCode == "B" && floatEqual(previousBuyResult, result.Total) {
+			continue
+		}
+		if result.OrderCode == "S" && floatEqual(previousSellResult, result.Total) {
+			continue
+		}
+
+		output := formatResult(result)
+
+		if output != "" {
+			if result.OrderCode == "B" {
+				previousBuyResult = result.Total
+			} else {
+				previousSellResult = result.Total
+
+			}
+			fmt.Println(output)
+		}
+	}
+
+	return nil
+}
+
+func (ob *OrderBook) parse(inputString string) (*OrderResult, error) {
 	in := strings.Split(inputString, " ")
 
 	switch len(in) {

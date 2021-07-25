@@ -20,14 +20,12 @@ func removeIndex(index int, data []*Order) []*Order {
 	return append(ret, data[index+1:]...)
 }
 
-// FloatEqual does float64 precies comparison
-func FloatEqual(a, b float64) bool {
+func floatEqual(a, b float64) bool {
 	ai, bi := int64(math.Float64bits(a)), int64(math.Float64bits(b))
 	return a == b || -1 <= ai-bi && ai-bi <= 1
 }
 
-// FormatResult returns properly formatted string
-func FormatResult(o *OrderResult) string {
+func formatResult(o *OrderResult) string {
 	var result string
 
 	switch t := o.Total; {
