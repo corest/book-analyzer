@@ -2,35 +2,35 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 
 	"github.com/corest/bookanalyzer/pkg/orderbook"
 )
 
-func RemoveIndex(s []int, index int) []int {
-	ret := make([]int, 0)
-	ret = append(ret, s[:index]...)
-	return append(ret, s[index+1:]...)
-}
-
 func main() {
+	targetSize := flag.Int("target-size", 0, "Target size for trading")
+	flag.Parse()
+
+	if *targetSize <= 0 {
+		panic("-target-size must be > 0")
+	}
+
 	scanner := bufio.NewScanner(os.Stdin)
-	orderBook := orderbook.New()
+	orderBook := orderbook.New(*targetSize)
 	for scanner.Scan() {
 		inputString := scanner.Text()
-		output, err := orderBook.Parse(inputString)
+
+		result, err := orderBook.Parse(inputString)
+
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			continue
 		}
 
-		if output != "" {
-			fmt.Println(output)
+		if result != "" {
+			fmt.Println(result)
 		}
 	}
-
-	orderBook.ShowBids()
-	orderBook.ShowAsks()
-	orderBook.ShowStates()
 }

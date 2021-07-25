@@ -8,40 +8,16 @@ import (
 	"strings"
 )
 
-type OrderType int
-
-const (
-	Undefined OrderType = iota
-	BidOrder
-	AskOrder
-)
-
-type Order struct {
-	Timestamp string // not used in program widely so no need in actual time
-	ID        string
-	Shares    int
-	Type      OrderType
-	Price     float64
-}
-
-type OrderBook struct {
-	bids     []*Order
-	asks     []*Order
-	orderIDs map[string]bool
-}
-
-func New() *OrderBook {
+func New(targetSize int) *OrderBook {
 	return &OrderBook{
-		orderIDs: map[string]bool{},
+		targetSize: targetSize,
+		orderIDs:   map[string]OrderState{},
 	}
 }
 
 func (ob *OrderBook) Parse(inputString string) (string, error) {
 	in := strings.Split(inputString, " ")
 
-	// add/remove order always has the same amount of shares for particular ID
-	// therefore it is either added or removed
-	// there is no need to have update order
 	switch len(in) {
 	case 6:
 		// format: "timestamp operation id order_type price shares"
@@ -53,52 +29,167 @@ func (ob *OrderBook) Parse(inputString string) (string, error) {
 			ID:        in[2],
 			Type:      orderType,
 			Price:     floatToFixedSign(price, 2),
-			Shares:    shares,
 		}
-		return ob.addOrder(newOrder)
+
+		income, err := ob.addOrder(shares, newOrder)
+		if err != nil {
+			return "", err
+		}
+
+		timestamp := in[0]
+		id := in[2]
+		orderCode := getOrderCode(ob.orderIDs[id].Type)
+
+		return formatResult(timestamp, orderCode, income), nil
+
 	case 4:
 		// format: "timestamp operation id shares"
 		shares, _ := strconv.Atoi(in[3])
-		return ob.markOrderDeleted(in[2], shares)
-	default:
-		return "", nil // error failed to parse and continue
+
+		expense := ob.removeSharesFromOrder(in[2], shares)
+
+		timestamp := in[0]
+		id := in[2]
+		orderCode := getOrderCode(ob.orderIDs[id].Type)
+
+		return formatResult(timestamp, orderCode, expense), nil
 	}
+
+	return "", errors.New(fmt.Sprintf("failed to parse input %s", inputString))
 }
 
-func (ob *OrderBook) addOrder(order *Order) (string, error) {
+// there are no orders adding new shares to existing
+func (ob *OrderBook) addOrder(shares int, order *Order) (float64, error) {
 	if order.Type == Undefined {
-		return "", errors.New("unknown order type")
+		return 0, errors.New("unknown order type")
 	}
 
-	ob.orderIDs[order.ID] = true
+	orderState := OrderState{
+		IsActive: true,
+		Type:     order.Type,
+		Shares:   shares,
+	}
+	ob.orderIDs[order.ID] = orderState
 
 	if order.Type == BidOrder {
-		return ob.addBidOrder(order)
+		return ob.addBidOrder(shares, order), nil
 	}
 
-	return ob.addAskOrder(order)
+	return ob.addAskOrder(shares, order), nil
 }
 
-func (ob *OrderBook) addBidOrder(order *Order) (string, error) {
+func (ob *OrderBook) addBidOrder(shares int, order *Order) float64 {
+	ob.bidShareSum += shares
 	ob.bids = addSortedOrder(order, ob.bids)
-	return "", nil
+
+	return ob.executeOrder(order.ID)
 }
 
-func (ob *OrderBook) addAskOrder(order *Order) (string, error) {
+func (ob *OrderBook) executeOrder(id string) float64 {
+	var total float64
+	{
+		if ob.orderIDs[id].Type == BidOrder && ob.bidShareSum >= ob.targetSize {
+			total = ob.sellShares()
+		}
+		if ob.orderIDs[id].Type == AskOrder && ob.askShareSum >= ob.targetSize {
+			total = ob.buyShares()
+		}
+	}
+
+	return total
+}
+
+func (ob *OrderBook) sellShares() float64 {
+	// running while before selling target-size shares
+	soldShares := 0
+	maxPriceOrderIndex := len(ob.bids) - 1 // take bid with highest price
+	var income float64
+	for soldShares < ob.targetSize {
+		order := ob.bids[maxPriceOrderIndex]
+		orderState := ob.orderIDs[order.ID]
+		currentSharesOnSale := orderState.Shares
+		maxPriceOrderIndex -= 1
+
+		// skip removed orders
+		if !orderState.IsActive {
+			continue
+		}
+
+		if soldShares+orderState.Shares > ob.targetSize {
+			currentSharesOnSale = ob.targetSize - soldShares
+		}
+
+		income += float64(currentSharesOnSale) * order.Price
+		soldShares += currentSharesOnSale
+	}
+
+	return income
+}
+
+func (ob *OrderBook) addAskOrder(shares int, order *Order) float64 {
+	ob.askShareSum += shares
 	ob.asks = addSortedOrder(order, ob.asks)
-	return "", nil
+
+	return ob.executeOrder(order.ID)
 }
 
-func (ob *OrderBook) markOrderDeleted(id string, shares int) (string, error) {
-	ob.orderIDs[id] = false
+func (ob *OrderBook) buyShares() float64 {
+	gainedShares := 0
+	minPriceOrderIndex := 0 // take ask with lowest price
+	var expense float64
+	for gainedShares < ob.targetSize {
+		order := ob.asks[minPriceOrderIndex]
+		orderState := ob.orderIDs[order.ID]
+		currentSharesOnBuy := orderState.Shares
+		minPriceOrderIndex += 1
 
-	return "", nil
+		// skip removed orders
+		if !orderState.IsActive {
+			continue
+		}
+
+		if gainedShares+orderState.Shares > ob.targetSize {
+			currentSharesOnBuy = ob.targetSize - gainedShares
+		}
+
+		expense += float64(currentSharesOnBuy) * order.Price
+		gainedShares += currentSharesOnBuy
+	}
+
+	return expense
+}
+
+func (ob *OrderBook) removeSharesFromOrder(id string, shares int) float64 {
+	orderState := ob.orderIDs[id]
+	orderState.Shares -= shares
+	// mark order as inactive as it has <= shares
+	if orderState.Shares <= 0 {
+		orderState.IsActive = false
+	}
+	ob.orderIDs[id] = orderState
+
+	if orderState.Type == BidOrder {
+		previousBidShareSum := ob.bidShareSum
+		ob.bidShareSum -= shares
+		if previousBidShareSum >= ob.targetSize && ob.bidShareSum < ob.targetSize {
+			return -1
+		}
+
+	} else {
+		previousAskShareSum := ob.askShareSum
+		ob.askShareSum -= shares
+		if previousAskShareSum >= ob.targetSize && ob.askShareSum < ob.targetSize {
+			return -1
+		}
+	}
+
+	return ob.executeOrder(id)
 }
 
 // debug purpose
 func (ob *OrderBook) ShowBids() {
 	for i, o := range ob.bids {
-		if ob.orderIDs[o.ID] {
+		if ob.orderIDs[o.ID].IsActive {
 			fmt.Printf("bid | id: %s | %d: %f\n", o.ID, i, o.Price)
 		}
 	}
@@ -106,14 +197,26 @@ func (ob *OrderBook) ShowBids() {
 
 func (ob *OrderBook) ShowAsks() {
 	for i, o := range ob.asks {
-		if ob.orderIDs[o.ID] {
+		if ob.orderIDs[o.ID].IsActive {
 			fmt.Printf("ask | id %s | %d: %f\n", o.ID, i, o.Price)
 		}
 	}
 }
 
 func (ob *OrderBook) ShowStates() {
-	fmt.Printf("\n%v\n", ob.orderIDs)
+	fmt.Printf("Bid shares sum: %d | ask shares sum: %d\n", ob.bidShareSum, ob.askShareSum)
+	fmt.Printf("%v\n", ob.orderIDs)
+}
+
+func getOrderCode(orderType OrderType) string {
+	switch orderType {
+	case BidOrder:
+		return "S"
+	case AskOrder:
+		return "B"
+	default:
+		return ""
+	}
 }
 
 func getOrderType(str string) OrderType {
@@ -140,4 +243,17 @@ func addSortedOrder(order *Order, data []*Order) []*Order {
 	data = append(data[:i+1], data[i:]...)
 	data[i] = order
 	return data
+}
+
+func formatResult(timestamp string, orderCode string, total float64) string {
+	var result string
+
+	switch t := total; {
+	case t > 0:
+		result = fmt.Sprintf("%s %s %.2f", timestamp, orderCode, total)
+	case t < 0:
+		result = fmt.Sprintf("%s %s NA", timestamp, orderCode)
+	}
+
+	return result
 }
