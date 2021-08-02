@@ -1,41 +1,42 @@
 package orderbook
 
-type OrderType int
+type OrderSide int
+type OperationType int
+type TradeAction int
 
 const (
-	Undefined OrderType = iota
+	Undefined OrderSide = iota
 	BidOrder
 	AskOrder
+)
+
+const (
+	UnknownOp OperationType = iota
+	AddOrder
+	ReduceOrder
+)
+
+const (
+	Buy TradeAction = iota
+	Sell
 )
 
 // Order represents order part with price
 type Order struct {
 	Timestamp string // not used in program as time so no need in actual time type
 	ID        string
-	Type      OrderType
+	Side      OrderSide
 	Price     float64
-}
-
-// OrderState represents order part with shares
-type OrderState struct {
-	Type     OrderType
-	IsActive bool
-	Shares   int
+	Size      int
+	Operation OperationType
 }
 
 // OrderBook represents struct where all business logic is bounded to
 type OrderBook struct {
-	bidShareSum int
-	askShareSum int
-	bids        []*Order
-	asks        []*Order
-	orderIDs    map[string]OrderState
-	targetSize  int
-}
-
-// OrderResult represents data from processing single input
-type OrderResult struct {
-	Total     float64
-	OrderCode string
-	Timestamp string
+	orders       map[string]Order
+	totalShares  map[OrderSide]int
+	orderIDs     map[string]OrderSide
+	canTrade     map[TradeAction]bool
+	totalHistory map[TradeAction]float64
+	targetSize   int
 }

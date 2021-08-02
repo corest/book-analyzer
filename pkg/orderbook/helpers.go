@@ -14,26 +14,15 @@ func floatToFixedSign(num float64, precision int) float64 {
 	return float64(round(num*output)) / output
 }
 
-func removeIndex(index int, data []*Order) []*Order {
-	ret := make([]*Order, 0)
-	ret = append(ret, data[:index]...)
-	return append(ret, data[index+1:]...)
-}
-
 func floatEqual(a, b float64) bool {
 	ai, bi := int64(math.Float64bits(a)), int64(math.Float64bits(b))
 	return a == b || -1 <= ai-bi && ai-bi <= 1
 }
 
-func formatResult(o *OrderResult) string {
-	var result string
-
-	switch t := o.Total; {
-	case t > 0:
-		result = fmt.Sprintf("%s %s %.2f", o.Timestamp, o.OrderCode, o.Total)
-	case t < 0:
-		result = fmt.Sprintf("%s %s NA", o.Timestamp, o.OrderCode)
+func formatResult(total float64, timestamp, tradeAction string) string {
+	if total > 0.0 {
+		return fmt.Sprintf("%s %s %.2f", timestamp, tradeAction, total)
+	} else {
+		return fmt.Sprintf("%s %s NA", timestamp, tradeAction)
 	}
-
-	return result
 }
