@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -13,238 +12,227 @@ import (
 // New returns newly initialized OrderBook
 func New(targetSize int) *OrderBook {
 	return &OrderBook{
-		targetSize: targetSize,
-		orderIDs:   map[string]OrderState{},
+		targetSize:   targetSize,
+		orders:       map[string]Order{},
+		orderIDs:     map[string]OrderSide{},
+		totalShares:  map[OrderSide]int{},
+		totalHistory: map[TradeAction]float64{},
+		canTrade:     map[TradeAction]bool{},
 	}
 }
 
+// Process is main execution function
 func (ob *OrderBook) Process(scanner *bufio.Scanner) error {
 
-	var previousBuyResult, previousSellResult float64
 	for scanner.Scan() {
 		inputString := scanner.Text()
-
-		result, err := ob.parse(inputString)
+		order, err := ob.parse(inputString)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			continue
 		}
-		if result.OrderCode == "B" && floatEqual(previousBuyResult, result.Total) {
-			continue
-		}
-		if result.OrderCode == "S" && floatEqual(previousSellResult, result.Total) {
-			continue
-		}
 
-		output := formatResult(result)
-
-		if output != "" {
-			if result.OrderCode == "B" {
-				previousBuyResult = result.Total
-			} else {
-				previousSellResult = result.Total
-
+		if order.Operation == AddOrder {
+			err := ob.addOrder(order)
+			if err != nil {
+				return err
 			}
-			fmt.Println(output)
+		} else {
+			err := ob.reduceOrder(order)
+			if err != nil {
+				return err
+			}
+		}
+
+		err = ob.processOrder(order)
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-func (ob *OrderBook) parse(inputString string) (*OrderResult, error) {
+func (ob *OrderBook) parse(inputString string) (Order, error) {
 	in := strings.Split(inputString, " ")
 
-	switch len(in) {
-	case 6:
-		// format: "timestamp operation id order_type price shares"
-		price, _ := strconv.ParseFloat(in[4], 32) // ignoring error for now
-		shares, _ := strconv.Atoi(in[5])
-		orderType := getOrderType(in[3])
-		newOrder := &Order{
-			Timestamp: in[0],
-			ID:        in[2],
-			Type:      orderType,
-			Price:     floatToFixedSign(price, 2),
-		}
-
-		income, err := ob.addOrder(shares, newOrder)
-		if err != nil {
-			return nil, err
-		}
-
-		timestamp := in[0]
-		id := in[2]
-		orderCode := getOrderCode(ob.orderIDs[id].Type)
-
-		return &OrderResult{
-			Timestamp: timestamp,
-			OrderCode: orderCode,
-			Total:     income,
-		}, nil
-
-	case 4:
-		// format: "timestamp operation id shares"
-		shares, _ := strconv.Atoi(in[3])
-
-		expense := ob.removeSharesFromOrder(in[2], shares)
-
-		timestamp := in[0]
-		id := in[2]
-		orderCode := getOrderCode(ob.orderIDs[id].Type)
-
-		return &OrderResult{
-			Timestamp: timestamp,
-			OrderCode: orderCode,
-			Total:     expense,
-		}, nil
-
-	}
-
-	return nil, errors.New(fmt.Sprintf("failed to parse input %s", inputString))
-}
-
-// there are no orders adding new shares to existing
-func (ob *OrderBook) addOrder(shares int, order *Order) (float64, error) {
-	if order.Type == Undefined {
-		return 0, errors.New("unknown order type")
-	}
-
-	orderState := OrderState{
-		IsActive: true,
-		Type:     order.Type,
-		Shares:   shares,
-	}
-	ob.orderIDs[order.ID] = orderState
-
-	if order.Type == BidOrder {
-		return ob.addBidOrder(shares, order), nil
-	}
-
-	return ob.addAskOrder(shares, order), nil
-}
-
-func (ob *OrderBook) addBidOrder(shares int, order *Order) float64 {
-	ob.bidShareSum += shares
-	ob.bids = ob.addSortedOrder(order, ob.bids)
-
-	return ob.executeOrder(order.ID)
-}
-
-func (ob *OrderBook) executeOrder(id string) float64 {
-	var total float64
+	var order Order
 	{
-		if ob.orderIDs[id].Type == BidOrder && ob.bidShareSum >= ob.targetSize {
-			total = ob.sellShares()
-		}
-		if ob.orderIDs[id].Type == AskOrder && ob.askShareSum >= ob.targetSize {
-			total = ob.buyShares()
+		switch len(in) {
+		case 6:
+			// format: "timestamp operation id order_type price shares"
+			price, _ := strconv.ParseFloat(in[4], 32) // ignoring error for now
+			shares, _ := strconv.Atoi(in[5])
+			orderSide := getOrderSide(in[3])
+			order = Order{
+				Timestamp: in[0],
+				ID:        in[2],
+				Side:      orderSide,
+				Operation: AddOrder,
+				Size:      shares,
+				Price:     floatToFixedSign(price, 2),
+			}
+
+		case 4:
+			// format: "timestamp operation id shares"
+			shares, _ := strconv.Atoi(in[3])
+
+			timestamp := in[0]
+			id := in[2]
+
+			order = Order{
+				Timestamp: timestamp,
+				Operation: ReduceOrder,
+				ID:        id,
+				Size:      shares,
+			}
+		default:
+			return Order{}, errors.New(fmt.Sprintf("failed to parse order %#q", inputString))
 		}
 	}
 
-	return total
+	return order, nil
 }
 
-func (ob *OrderBook) sellShares() float64 {
-	// running while before selling target-size shares
-	soldShares := 0
-	maxPriceOrderIndex := len(ob.bids) - 1 // take bid with highest price
-	var income float64
-	for soldShares < ob.targetSize {
-		order := ob.bids[maxPriceOrderIndex]
-		orderState := ob.orderIDs[order.ID]
-		currentSharesOnSale := orderState.Shares
-		maxPriceOrderIndex -= 1
+func (ob *OrderBook) addOrder(order Order) error {
+	ob.orderIDs[order.ID] = order.Side
+	ob.orders[order.ID] = order
+	ob.totalShares[order.Side] += order.Size
 
-		// skip removed orders
-		if !orderState.IsActive {
-			continue
-		}
+	return nil
+}
 
-		if soldShares+orderState.Shares > ob.targetSize {
-			currentSharesOnSale = ob.targetSize - soldShares
-		}
+func (ob *OrderBook) reduceOrder(order Order) error {
+	targetOrder := ob.orders[order.ID]
+	targetOrder.Size -= order.Size
 
-		income += float64(currentSharesOnSale) * order.Price
-		soldShares += currentSharesOnSale
+	ob.totalShares[targetOrder.Side] -= order.Size
+
+	if targetOrder.Size <= 0 {
+		delete(ob.orders, targetOrder.ID)
+	} else {
+		ob.orders[order.ID] = targetOrder
 	}
 
-	return income
+	return nil
 }
 
-func (ob *OrderBook) addAskOrder(shares int, order *Order) float64 {
-	ob.askShareSum += shares
-	ob.asks = ob.addSortedOrder(order, ob.asks)
-
-	return ob.executeOrder(order.ID)
+func (ob *OrderBook) executeOrder(action TradeAction) float64 {
+	if action == Buy {
+		return ob.buyShares()
+	} else {
+		return ob.sellShares()
+	}
 }
 
 func (ob *OrderBook) buyShares() float64 {
-	gainedShares := 0
-	minPriceOrderIndex := 0 // take ask with lowest price
+	orders := make([]Order, len(ob.orders))
+
+	for _, order := range ob.orders {
+		if order.Side == AskOrder {
+			orders = append(orders, order)
+		}
+	}
+
+	// order by lowest price
+	By(sortByPriceAsc).Sort(orders)
+	var gainedShares, currentSharesOnBuy int
 	var expense float64
 	for gainedShares < ob.targetSize {
-		order := ob.asks[minPriceOrderIndex]
-		orderState := ob.orderIDs[order.ID]
-		currentSharesOnBuy := orderState.Shares
-		minPriceOrderIndex += 1
+		for _, order := range orders {
+			currentSharesOnBuy = order.Size
+			if gainedShares+order.Size >= ob.targetSize {
+				currentSharesOnBuy = ob.targetSize - gainedShares
+			}
 
-		// skip removed orders
-		// todo: cleanup removed orders with some frequency
-		if !orderState.IsActive {
-			continue
+			expense += float64(currentSharesOnBuy) * order.Price
+			gainedShares += currentSharesOnBuy
+
 		}
-
-		if gainedShares+orderState.Shares > ob.targetSize {
-			currentSharesOnBuy = ob.targetSize - gainedShares
-		}
-
-		expense += float64(currentSharesOnBuy) * order.Price
-		gainedShares += currentSharesOnBuy
 	}
 
 	return expense
 }
 
-func (ob *OrderBook) removeSharesFromOrder(id string, shares int) float64 {
-	orderState := ob.orderIDs[id]
-	orderState.Shares -= shares
-	// mark order as inactive as it has <= shares
-	if orderState.Shares <= 0 {
-		orderState.IsActive = false
-	}
-	ob.orderIDs[id] = orderState
-
-	if orderState.Type == BidOrder {
-		previousBidShareSum := ob.bidShareSum
-		ob.bidShareSum -= shares
-		if previousBidShareSum >= ob.targetSize && ob.bidShareSum < ob.targetSize {
-			return -1
-		}
-
-	} else {
-		previousAskShareSum := ob.askShareSum
-		ob.askShareSum -= shares
-		if previousAskShareSum >= ob.targetSize && ob.askShareSum < ob.targetSize {
-			return -1
+func (ob *OrderBook) sellShares() float64 {
+	var orders []Order
+	for _, order := range ob.orders {
+		if order.Side == BidOrder {
+			orders = append(orders, order)
 		}
 	}
+	// order by highest price
+	By(sortByPriceDesc).Sort(orders)
+	var gainedShares, currentSharesOnSale int
+	var income float64
+	for gainedShares < ob.targetSize {
+		for _, order := range orders {
+			currentSharesOnSale = order.Size
+			if gainedShares+order.Size >= ob.targetSize {
+				currentSharesOnSale = ob.targetSize - gainedShares
+			}
 
-	return ob.executeOrder(id)
-}
+			income += float64(currentSharesOnSale) * order.Price
+			gainedShares += currentSharesOnSale
 
-func getOrderCode(orderType OrderType) string {
-	switch orderType {
-	case BidOrder:
-		return "S"
-	case AskOrder:
-		return "B"
-	default:
-		return ""
+		}
 	}
+
+	return income
 }
 
-func getOrderType(str string) OrderType {
+func (ob *OrderBook) processOrder(order Order) error {
+	targetOrderSide := ob.orderIDs[order.ID]
+	if targetOrderSide == BidOrder {
+		if ob.canTrade[Sell] {
+			// Enough bids for sale
+			if ob.totalShares[BidOrder] >= ob.targetSize {
+				total := ob.executeOrder(Sell)
+				if total != ob.totalHistory[Sell] {
+					ob.totalHistory[Sell] = total
+					fmt.Println(formatResult(total, order.Timestamp, "S"))
+				}
+			} else {
+				ob.canTrade[Sell] = false
+				fmt.Println(formatResult(0.0, order.Timestamp, "S"))
+			}
+		} else if !ob.canTrade[Sell] {
+			if ob.totalShares[BidOrder] >= ob.targetSize {
+				total := ob.executeOrder(Sell)
+				ob.totalHistory[Sell] = total
+				ob.canTrade[Sell] = true
+				fmt.Println(formatResult(total, order.Timestamp, "S"))
+			}
+		}
+	}
+
+	if targetOrderSide == AskOrder {
+		if ob.canTrade[Buy] {
+			// Enough asks to buy
+			if ob.totalShares[AskOrder] >= ob.targetSize {
+				total := ob.executeOrder(Buy)
+				if total != ob.totalHistory[Buy] {
+					ob.totalHistory[Buy] = total
+					fmt.Println(formatResult(total, order.Timestamp, "B"))
+				}
+			} else {
+				ob.canTrade[Buy] = false
+				fmt.Println(formatResult(0.0, order.Timestamp, "B"))
+			}
+		} else if !ob.canTrade[Buy] {
+			if ob.totalShares[AskOrder] >= ob.targetSize {
+				total := ob.executeOrder(Buy)
+				ob.totalHistory[Buy] = total
+				ob.canTrade[Buy] = true
+				fmt.Println(formatResult(total, order.Timestamp, "B"))
+			}
+		}
+	}
+
+	return nil
+}
+
+func getOrderSide(str string) OrderSide {
 	switch str {
 	case "B":
 		return BidOrder
@@ -253,22 +241,4 @@ func getOrderType(str string) OrderType {
 	default:
 		return Undefined
 	}
-}
-
-func (ob *OrderBook) addSortedOrder(order *Order, data []*Order) []*Order {
-	i := sort.Search(len(data), func(i int) bool {
-		if data[i].Price == order.Price {
-			return ob.orderIDs[data[i].ID].Shares <= ob.orderIDs[order.ID].Shares
-		}
-		return data[i].Price > order.Price
-	})
-
-	if i == len(data) {
-		return append(data, order)
-	}
-
-	// make space for the inserted element by shifting values
-	data = append(data[:i+1], data[i:]...)
-	data[i] = order
-	return data
 }
